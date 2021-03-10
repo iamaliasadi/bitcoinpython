@@ -1,6 +1,10 @@
 # import requests
 # from requests.exceptions import ConnectionError, HTTPError, Timeout
+from functools import wraps
+from time import time
 
+import requests
+from requests.exceptions import ConnectionError, HTTPError, Timeout
 # Ideally, fast, medium, slow would correlate with actually blocks out.
 # Fast, really shoot for getting into the next block no matter what.
 # Medium should get in within the next couple blocks, 90% certainty.
@@ -34,3 +38,9 @@ def get_fee(speed=FEE_SPEED_MEDIUM):
         return DEFAULT_FEE_SLOW
     else:
         raise ValueError('Invalid speed argument.')
+
+
+
+
+
+

@@ -1,17 +1,31 @@
 import json
 
-from bitcoinpython.crypto import ECPrivateKey
+from bitcoinpython.crypto import ECPrivateKey,ripemd160_sha256
 from bitcoinpython.curve import Point
 from bitcoinpython.format import (
-    bytes_to_wif, public_key_to_address, public_key_to_coords, wif_to_bytes,
-    address_to_public_key_hash
+    bytes_to_wif,
+    public_key_to_address,
+    public_key_to_coords,
+    wif_to_bytes,
+    multisig_to_address,
+    multisig_to_redeemscript,
+    public_key_to_segwit_address,
+    multisig_to_segwit_address,
 )
-from bitcoinpython.network import NetworkAPI, get_fee, satoshi_to_currency_cached
+from bitcoinpython.constants import OP_0, OP_PUSH_20, OP_PUSH_32
+from bitcoinpython.utils import bytes_to_hex
+from bitcoinpython.network import NetworkAPI, get_fee,  satoshi_to_currency_cached
 from bitcoinpython.network.meta import Unspent
 from bitcoinpython.transaction import (
     calc_txid, create_p2pkh_transaction, sanitize_tx_data,
-    OP_CHECKSIG, OP_DUP, OP_EQUALVERIFY, OP_HASH160, OP_PUSH_20
-    )
+    OP_CHECKSIG, OP_DUP, OP_EQUALVERIFY, OP_HASH160, OP_PUSH_20,
+    address_to_public_key_hash,
+    create_new_transaction,
+    sanitize_tx_data,
+    sign_tx,
+    deserialize,
+    address_to_scriptpubkey
+)
 
 
 def wif_to_key(wif):
@@ -36,6 +50,7 @@ class BaseKey:
     :type wif: ``str``
     :raises TypeError: If ``wif`` is not a ``str``.
     """
+
     def __init__(self, wif=None):
         if wif:
             if isinstance(wif, str):
@@ -144,7 +159,8 @@ class PrivateKey(BaseKey):
     def address(self):
         """The public address you share with others to receive funds."""
         if self._address is None:
-            self._address = public_key_to_address(self._public_key, version='main')
+            self._address = public_key_to_address(
+                self._public_key, version='main')
 
         return self._address
 
@@ -286,7 +302,6 @@ class PrivateKey(BaseKey):
         tx_hex = self.create_transaction(
             outputs, fee=fee, leftover=leftover, combine=combine, message=message, unspents=unspents
         )
-        
         NetworkAPI.broadcast_tx(tx_hex)
 
         return calc_txid(tx_hex)
@@ -410,7 +425,6 @@ class PrivateKey(BaseKey):
 
     def __repr__(self):
         return '<PrivateKey: {}>'.format(self.address)
-
 
 
 Key = PrivateKey
