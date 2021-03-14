@@ -405,7 +405,6 @@ class BlockchairAPI:
         if r.status_code != 200:  # pragma: no cover
             raise ConnectionError
         response = r.json()
-
         block_height = response['context']['state']
         response = response['data'][address]
         script_pubkey = response['address']['script_hex']
@@ -447,6 +446,7 @@ class BlockchairAPI:
     def broadcast_tx_testnet(cls, tx_hex):  # pragma: no cover
         r = requests.post(cls.TEST_TX_PUSH_API, data={
                           cls.TX_PUSH_PARAM: tx_hex}, timeout=DEFAULT_TIMEOUT)
+        print(r.json())
         return True if r.status_code == 200 else False
 
 
@@ -870,6 +870,7 @@ class SmartbitAPI:
     def broadcast_tx_testnet(cls, tx_hex):  # pragma: no cover
         r = requests.post(cls.TEST_TX_PUSH_API, json={
                           cls.TX_PUSH_PARAM: tx_hex}, timeout=DEFAULT_TIMEOUT)
+        print(r.json())
         return True if r.status_code == 200 else False
 
 
@@ -983,16 +984,16 @@ class NetworkAPI:
                         BitcoreAPI.get_balance]
     GET_BALANCE_MAIN_BTC = [BitcoreAPI.get_balance_btc,
                             BlockchairAPI.get_balance,
-                            BlockstreamAPI.get_balance,
                             SmartbitAPI.get_balance,
-                            BlockchainAPI.get_balance]
+                            BlockchainAPI.get_balance,
+                            BlockstreamAPI.get_balance]
     GET_TRANSACTIONS_MAIN = [BitcoinDotComAPI.get_transactions,
                              BitcoreAPI.get_transactions]
     GET_TRANSACTIONS_MAIN_BTC = [BitcoreAPI.get_transactions_btc,
                                  BlockchairAPI.get_transactions,  # Limit 1000
-                                 BlockstreamAPI.get_transactions,  # Limit 1000
                                  SmartbitAPI.get_transactions,  # Limit 1000
-                                 BlockchainAPI.get_transactions  # No limit, requires multiple requests
+                                 BlockchainAPI.get_transactions,  # No limit, requires multiple requests
+                                 BlockstreamAPI.get_transactions,  # Limit 1000
                                  ]
 
     GET_UNSPENT_MAIN = [BitcoinDotComAPI.get_unspent,
@@ -1002,18 +1003,18 @@ class NetworkAPI:
     BROADCAST_TX_MAIN = [BitcoinDotComAPI.broadcast_tx]
 
     BROADCAST_TX_MAIN_BTC = [BlockchairAPI.broadcast_tx,
-                             BlockstreamAPI.broadcast_tx,
                              SmartbitAPI.broadcast_tx,  # Limit 5/minute
-                             BlockchainAPI.broadcast_tx]
+                             BlockchainAPI.broadcast_tx,
+                             BlockstreamAPI.broadcast_tx, ]
 
     GET_TX_MAIN = [BitcoinDotComAPI.get_transaction,
                    BitcoreAPI.get_transaction]
 
     GET_TX_MAIN_BTC = [BitcoreAPI.get_transaction_btc,
                        BlockchairAPI.get_transaction_by_id,
-                       BlockstreamAPI.get_transaction_by_id,
                        SmartbitAPI.get_transaction_by_id,
-                       BlockchainAPI.get_transaction_by_id]
+                       BlockchainAPI.get_transaction_by_id,
+                       BlockstreamAPI.get_transaction_by_id, ]
     GET_TX_AMOUNT_MAIN = [BitcoinDotComAPI.get_tx_amount]
     GET_RAW_TX_MAIN = [BitcoinDotComAPI.get_raw_transaction]
 
@@ -1023,23 +1024,23 @@ class NetworkAPI:
         SmartbitAPI.get_balance_testnet,
     ]
     GET_TRANSACTIONS_TEST = [
+        SmartbitAPI.get_transactions_testnet,  # Limit 1000
         BlockchairAPI.get_transactions_testnet,  # Limit 1000
         BlockstreamAPI.get_transactions_testnet,
-        SmartbitAPI.get_transactions_testnet,  # Limit 1000
     ]
     GET_TRANSACTION_BY_ID_TEST = [
+        SmartbitAPI.get_transaction_by_id_testnet,
         BlockchairAPI.get_transaction_by_id_testnet,
         BlockstreamAPI.get_transaction_by_id_testnet,
-        SmartbitAPI.get_transaction_by_id_testnet,
     ]
-    GET_UNSPENT_TEST = [
-        BlockstreamAPI.get_unspent_testnet,
-        BlockchairAPI.get_unspent_testnet,
+    GET_UNSPENT_TEST_BTC = [
         SmartbitAPI.get_unspent_testnet,  # Limit 1000
+        BlockchairAPI.get_unspent_testnet,
+        BlockstreamAPI.get_unspent_testnet,
     ]
     BROADCAST_TX_TEST = [
-        BlockchairAPI.broadcast_tx_testnet,
         BlockstreamAPI.broadcast_tx_testnet,
+        BlockchairAPI.broadcast_tx_testnet,
         SmartbitAPI.broadcast_tx_testnet,  # Limit 5/minute
     ]
 
@@ -1203,7 +1204,6 @@ class NetworkAPI:
 
         raise ConnectionError('All APIs are unreachable.')
 
-
     @classmethod
     def get_tx_amount(cls, txid, txindex):
         """Gets the amount of a given transaction output.
@@ -1259,9 +1259,9 @@ class NetworkAPI:
                 pass
 
         raise ConnectionError('All APIs are unreachable.')
-    
+
     @classmethod
-    def get_unspent_testnet(cls, address):
+    def get_unspent_testnet_btc(cls, address):
         """Gets all unspent transaction outputs belonging to an address on the
         test network.
         :param address: The address in question.
@@ -1270,7 +1270,7 @@ class NetworkAPI:
         :rtype: ``list`` of :class:`~bit.network.meta.Unspent`
         """
 
-        for api_call in cls.GET_UNSPENT_TEST:
+        for api_call in cls.GET_UNSPENT_TEST_BTC:
             try:
                 return api_call(address)
             except cls.IGNORED_ERRORS:
@@ -1321,7 +1321,6 @@ class NetworkAPI:
 
         raise ConnectionError('All APIs are unreachable.')
 
-
     @classmethod
     def broadcast_tx_testnet(cls, tx_hex):  # pragma: no cover
         """Broadcasts a transaction to the test network's blockchain.
@@ -1341,6 +1340,7 @@ class NetworkAPI:
                 pass
 
         if success is False:
-            raise ConnectionError('Transaction broadcast failed, or Unspents were already used.')
+            raise ConnectionError(
+                'Transaction broadcast failed, or Unspents were already used.')
 
         raise ConnectionError('All APIs are unreachable.')

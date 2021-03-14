@@ -50,7 +50,7 @@ def get_version(address):
     if version in (MAIN_PUBKEY_HASH, MAIN_SCRIPT_HASH) or version in BECH32_MAIN_VERSION_SET:
         return 'main'
     elif version in (TEST_PUBKEY_HASH, TEST_SCRIPT_HASH) or version in BECH32_TEST_VERSION_SET:
-        return 'test'
+        return 'btc_test'
     else:
         raise ValueError('{} does not correspond to a mainnet nor testnet address.'.format(version))
 
@@ -109,7 +109,7 @@ def wif_checksum_check(wif):
 
 def public_key_to_address(public_key, version='main'):
 
-    if version == 'test':
+    if version == 'btc_test':
         version = TEST_PUBKEY_HASH
     else:
         version = MAIN_PUBKEY_HASH

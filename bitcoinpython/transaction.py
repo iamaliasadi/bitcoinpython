@@ -1,6 +1,7 @@
 import logging
 from collections import namedtuple
 from itertools import islice
+from random import randint, shuffle
 from cashaddress import convert as cashaddress
 from bitcoinpython.base58 import b58decode_check
 from bitcoinpython.base32 import decode as segwit_decode
@@ -164,6 +165,240 @@ def get_op_pushdata_code(dest):
     else:
         # OP_PUSHDATA4 format
         return OP_PUSHDATA4 + length_data.to_bytes(4, byteorder='little')
+
+
+def select_coins(target, fee, output_size, min_change, *, absolute_fee=False, consolidate=False, unspents):
+    '''
+    Implementation of Branch-and-Bound coin selection defined in Erhart's
+    Master's thesis An Evaluation of Coin Selection Strategies here:
+    http://murch.one/wp-content/uploads/2016/11/erhardt2016coinselection.pdf
+    :param target: The total amount of the outputs in a transaction for which
+                   we try to select the inputs to spend.
+    :type target: ``int``
+    :param fee: The number of satoshi per byte for the fee of the transaction.
+    :type fee: ``int``
+    :param output_size: A list containing as int the sizes of each output.
+    :type output_size: ``list`` of ``int`
+    :param min_change: The minimum amount of satoshis allowed for the
+                       return/change address if there is no perfect match.
+    :type min_change: ``int``
+    :param absolute_fee: Whether or not the parameter ``fee`` should be
+                         repurposed to denote the exact fee amount.
+    :type absolute_fee: ``bool``
+    :param consolidate: Whether or not the Branch-and-Bound process for finding
+                        a perfect match should be skipped and all unspents
+                        used directly.
+    :type consolidate: ``bool``
+    :param unspents: The UTXOs to use as inputs.
+    :type unspents: ``list`` of :class:`~bit.network.meta.Unspent`
+    :raises InsufficientFunds: If ``unspents`` does not contain enough balance
+                               to allow spending matching the target.
+    '''
+
+    # The maximum number of tries for Branch-and-Bound:
+    BNB_TRIES = 1000000
+
+    # COST_OF_OVERHEAD excludes the return address of output_size (last element).
+    COST_OF_OVERHEAD = (8 + sum(output_size[:-1]) + 1) * fee
+
+    def branch_and_bound(d, selected_coins, effective_value, target, fee, sorted_unspents):  # pragma: no cover
+
+        nonlocal COST_OF_OVERHEAD, BNB_TRIES
+        BNB_TRIES -= 1
+        COST_PER_INPUT = 148 * fee  # Just typical estimate values
+        COST_PER_OUTPUT = 34 * fee
+
+        # The target we want to match includes cost of overhead for transaction
+        target_to_match = target + COST_OF_OVERHEAD
+        # Allowing to pay fee for a whole input and output is rationally
+        # correct, but increases the fee-rate dramatically for only few inputs.
+        match_range = COST_PER_INPUT + COST_PER_OUTPUT
+        # We could allow to spend up to X% more on the fees if we can find a
+        # perfect match:
+        # match_range += int(0.1 * fee * sum(u.vsize for u in selected_coins))
+
+        # Check for solution and cut criteria:
+        if effective_value > target_to_match + match_range:
+            return []
+        elif effective_value >= target_to_match:
+            return selected_coins
+        elif BNB_TRIES <= 0:
+            return []
+        elif d >= len(sorted_unspents):
+            return []
+        else:
+            # Randomly explore next branch:
+            binary_random = randint(0, 1)
+            if binary_random:
+                # Explore inclusion branch first, else omission branch:
+                effective_value_new = effective_value + sorted_unspents[d].amount - fee * sorted_unspents[d].vsize
+
+                with_this = branch_and_bound(
+                    d + 1, selected_coins + [sorted_unspents[d]], effective_value_new, target, fee, sorted_unspents
+                )
+
+                if with_this != []:
+                    return with_this
+                else:
+                    without_this = branch_and_bound(
+                        d + 1, selected_coins, effective_value, target, fee, sorted_unspents
+                    )
+
+                    return without_this
+
+            else:
+                # As above but explore omission branch first:
+                without_this = branch_and_bound(d + 1, selected_coins, effective_value, target, fee, sorted_unspents)
+
+                if without_this != []:
+                    return without_this
+                else:
+                    effective_value_new = effective_value + sorted_unspents[d].amount - fee * sorted_unspents[d].vsize
+
+                    with_this = branch_and_bound(
+                        d + 1, selected_coins + [sorted_unspents[d]], effective_value_new, target, fee, sorted_unspents
+                    )
+
+                    return with_this
+
+    sorted_unspents = sorted(unspents, key=lambda u: u.amount, reverse=True)
+    selected_coins = []
+
+    if not consolidate and not absolute_fee:
+        # Trying to find a perfect match using Branch-and-Bound:
+        selected_coins = branch_and_bound(
+            d=0, selected_coins=[], effective_value=0, target=target, fee=fee, sorted_unspents=sorted_unspents
+        )
+        remaining = 0
+
+    # Fallback: If no match, Single Random Draw with return address:
+    if selected_coins == []:
+        unspents = unspents.copy()
+        # Since we have no information on the user's spending habit it is
+        # best practice to randomly select UTXOs until we have enough.
+        if not consolidate:
+            # To have a deterministic way of inserting inputs when
+            # consolidating, we only shuffle the unspents otherwise.
+            shuffle(unspents)
+        while unspents:
+            selected_coins.append(unspents.pop(0))
+            estimated_fee = estimate_tx_feee(
+                0, len(selected_coins), sum(output_size), len(output_size), fee, 0
+            )
+            estimated_fee = fee if absolute_fee else estimated_fee
+            remaining = sum(u.amount for u in selected_coins) - target - estimated_fee
+            if remaining >= min_change and (not consolidate or len(unspents) == 0):
+                break
+        else:
+            raise InsufficientFunds(
+                'Balance {} is less than {} (including '
+                'fee).'.format(sum(u.amount for u in selected_coins), target + min_change + estimated_fee)
+            )
+
+    return selected_coins, remaining
+
+
+import math
+def estimate_tx_feee(in_size, n_in, out_size, n_out, satoshis, segwit=False):
+
+    if not satoshis:
+        return 0
+
+    estimated_size = math.ceil(
+        in_size
+        + len(int_to_unknown_bytes(n_in, byteorder='little'))
+        + out_size
+        + len(int_to_unknown_bytes(n_out, byteorder='little'))
+        + 8
+        # Accounting for magic header vBytes ('0001') 
+        + (0.5 if segwit else 0)
+    )
+
+    estimated_fee = estimated_size * satoshis
+
+    logging.debug('Estimated fee: {} satoshis for {} bytes'.format(estimated_fee, estimated_size))
+
+    return estimated_fee
+
+
+def sanitize_tx_dataa(
+    unspents,
+    outputs,
+    fee,
+    leftover,
+    combine=True,
+    message=None,
+    compressed=True,
+    absolute_fee=False,
+    min_change=0,
+    version='main',
+    message_is_hex=False,
+    replace_by_fee=False
+):
+    """
+    sanitize_tx_dataa()
+    fee is in satoshis per byte.
+    """
+
+    outputs = outputs.copy()
+
+    for i, output in enumerate(outputs):
+        dest, amount, currency = output
+        outputs[i] = (dest, currency_to_satoshi_cached(amount, currency))
+
+    if not unspents:
+        raise ValueError('Transactions must have at least one unspent.')
+
+    # Temporary storage so all outputs precede messages.
+    messages = []
+
+    if message:
+        if message_is_hex:
+            message_chunks = chunk_data(message, MESSAGE_LIMIT)
+        else:
+            message_chunks = chunk_data(message.encode('utf-8'), MESSAGE_LIMIT)
+
+        for message in message_chunks:
+            messages.append((message, 0))
+
+    # Include return address in output count.
+    # Calculate output size as a list (including return address).
+    output_size = [len(address_to_scriptpubkey(o[0])) + 9 for o in outputs]
+    output_size.append(len(messages) * (MESSAGE_LIMIT + 9))
+    output_size.append(len(address_to_scriptpubkey(leftover)) + 9)
+    sum_outputs = sum(out[1] for out in outputs)
+
+    # Use Branch-and-Bound for coin selection:
+    unspents[:], remaining = select_coins(
+        sum_outputs,
+        fee,
+        output_size,
+        min_change=min_change,
+        absolute_fee=absolute_fee,
+        consolidate=combine,
+        unspents=unspents,
+    )
+
+    if replace_by_fee:
+        for unspent in unspents:
+            unspent.opt_in_for_RBF()
+
+    if remaining > 0:
+        outputs.append((leftover, remaining))
+
+    # Sanity check: If spending from main-/testnet, then all output addresses must also be for main-/testnet.
+    for output in outputs:
+        dest, amount = output
+        vs = get_version(dest)
+        if vs and vs != version:
+            raise ValueError('Cannot send to ' + vs + 'net address when spending from a ' + version + 'net address.')
+
+    outputs.extend(messages)
+
+    return unspents, outputs
+
+
+
 
 
 def sanitize_tx_data(unspents, outputs, fee, leftover, combine=True, message=None, compressed=True, custom_pushdata=False):
@@ -594,7 +829,7 @@ def sign_tx(private_key, tx, *, unspents):
     for i in sign_inputs:
         # Create transaction object for preimage calculation
         tx_input = tx.TxIn[i].txid + tx.TxIn[i].txindex
-        segwit_input = input_dict[tx_input]['segwit']
+        segwit_input = False #input_dict[tx_input]['segwit']
         tx.TxIn[i].segwit_input = segwit_input
 
         script_code = private_key.scriptcode
@@ -713,16 +948,15 @@ def create_new_transaction(private_key, unspents, outputs):
     # Optimize for speed, not memory, by pre-computing values.
     inputs = []
     for unspent in unspents:
-        script_sig = b''  # empty scriptSig for new unsigned transaction.
+        script_sig = hex_to_bytes(unspent.script) #b''  # empty scriptSig for new unsigned transaction.
         txid = hex_to_bytes(unspent.txid)[::-1]
         txindex = unspent.txindex.to_bytes(4, byteorder='little')
         amount = int(unspent.amount).to_bytes(8, byteorder='little')
-        sequence = unspent.sequence.to_bytes(4, byteorder='little')
-        inputs.append(TxInn(script_sig, txid, txindex, amount=amount, segwit_input=unspent.segwit,
+        sequence = SEQUENCE
+        inputs.append(TxInn(script_sig, txid, txindex, amount=amount, segwit_input=False,
                             sequence=sequence))
 
     tx_unsigned = TxObj(version, inputs, outputs, lock_time)
-
     tx = sign_tx(private_key, tx_unsigned, unspents=unspents)
     return tx
 

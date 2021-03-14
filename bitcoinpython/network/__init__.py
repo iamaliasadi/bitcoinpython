@@ -1,4 +1,4 @@
-from .fees import get_fee
+from .fees import get_fee_bch as get_fee, get_fee_cached
 from .rates import (
     currency_to_satoshi, currency_to_satoshi_cached,
     satoshi_to_currency, satoshi_to_currency_cached
@@ -6,5 +6,5 @@ from .rates import (
 from .services import NetworkAPI
 
 
-__all__ = ['get_fee','currency_to_satoshi', 'currency_to_satoshi_cached',
-    'satoshi_to_currency', 'satoshi_to_currency_cached','NetworkAPI']
+__all__ = ['get_fee', 'currency_to_satoshi', 'currency_to_satoshi_cached',
+           'satoshi_to_currency', 'satoshi_to_currency_cached', 'NetworkAPI', 'get_fee_cached']
